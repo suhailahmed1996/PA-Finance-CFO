@@ -1,6 +1,8 @@
 // Pattern-based transaction parser. No API. No network.
 // Parses free text like "spent 500 on lunch" into structured transactions.
 
+import { predictFromMemory } from './learning.js';
+
 const KEYWORDS = {
   income: ['received', 'got paid', 'salary', 'invoice paid', 'earned', 'income', 'credit', 'refund', 'transferred from', 'deposit', 'bonus', 'dividend', 'rent received', 'paid by'],
   expense: ['spent', 'paid', 'bought', 'purchased', 'expense', 'cost', 'bill', 'debit', 'transferred to', 'gave']
@@ -55,7 +57,7 @@ const wordMatches = (haystack, kw) => {
   return re.test(haystack);
 };
 
-export function parseTransaction(text) {
+export function parseTransaction(text, memory = null) {
   if (!text || !text.trim()) {
     return { error: 'Empty input' };
   }
@@ -101,20 +103,32 @@ export function parseTransaction(text) {
     if (lower.includes(hint)) { scope = 'business'; break; }
   }
 
-  // Category by keyword score, restricted to relevant set
+  // Category: blend keyword score + learned memory score
   const candidates = type === 'income'
     ? (scope === 'business' ? BUSINESS_CATS_INCOME : PERSONAL_CATS_INCOME)
     : (scope === 'business' ? BUSINESS_CATS_EXPENSE : PERSONAL_CATS_EXPENSE);
 
+  // Memory scores: how many past transactions with these words went to each category
+  const memoryScores = memory ? predictFromMemory(memory, lower, candidates) : {};
+
   let bestCat = null;
   let bestScore = 0;
+  let usedMemory = false;
   for (const cat of candidates) {
     const kws = CATEGORY_KEYWORDS[cat] || [];
-    let score = 0;
+    let kwScore = 0;
     for (const kw of kws) {
-      if (wordMatches(lower, kw)) score += kw.length;
+      if (wordMatches(lower, kw)) kwScore += kw.length;
     }
-    if (score > bestScore) { bestScore = score; bestCat = cat; }
+    // Memory votes carry weight. Each prior categorization = 5 points.
+    // This means after ~2 corrections, memory overrides default keyword match.
+    const memScore = (memoryScores[cat] || 0) * 5;
+    const totalScore = kwScore + memScore;
+    if (totalScore > bestScore) {
+      bestScore = totalScore;
+      bestCat = cat;
+      usedMemory = memScore > kwScore;
+    }
   }
 
   if (!bestCat) {
@@ -139,6 +153,7 @@ export function parseTransaction(text) {
     amount,
     scope,
     category: bestCat,
-    description: description.slice(0, 80)
+    description: description.slice(0, 80),
+    learnedSuggestion: usedMemory
   };
 }

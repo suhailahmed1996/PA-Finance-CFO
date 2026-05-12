@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { S } from './storage.js';
 import { parseTransaction } from './parser.js';
+import { buildMemory, memoryStats } from './learning.js';
 import * as F from './formulas.js';
 import { analyze, brief, answer, getSuggestedQuestions } from './cfo.js';
 import { KNOWLEDGE } from './knowledge.js';
@@ -238,7 +239,7 @@ const EditModal = ({ txn, onSave, onClose, onDelete }) => {
 // ============================================================
 // TODAY SCREEN
 // ============================================================
-const Today = ({ txns, onAdd, onUndo, lastDeleted, onNav, budgets, onEdit, onManualAdd }) => {
+const Today = ({ txns, onAdd, onUndo, lastDeleted, onNav, budgets, onEdit, onManualAdd, memory }) => {
   const [input, setInput] = useState('');
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState('');
@@ -272,7 +273,7 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onNav, budgets, onEdit, onMan
   const handleParse = () => {
     if (!input.trim()) return;
     setError('');
-    const parsed = parseTransaction(input);
+    const parsed = parseTransaction(input, memory);
     if (parsed.error) { setError(parsed.error); return; }
     setPreview(parsed);
   };
@@ -415,9 +416,22 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onNav, budgets, onEdit, onMan
               </div>
               <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '11px', padding: '4px 10px', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '20px', color: C.textDim, textTransform: 'capitalize' }}>{preview.scope}</span>
-                <span style={{ fontSize: '11px', padding: '4px 10px', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '20px', color: C.textDim }}>{preview.category}</span>
+                <span style={{
+                  fontSize: '11px', padding: '4px 10px',
+                  background: preview.learnedSuggestion ? 'rgba(232,168,76,0.12)' : C.panelHi,
+                  border: `1px solid ${preview.learnedSuggestion ? C.accent : C.border}`,
+                  borderRadius: '20px',
+                  color: preview.learnedSuggestion ? C.accent : C.textDim
+                }}>
+                  {preview.learnedSuggestion && '✦ '}{preview.category}
+                </span>
                 {preview.description && <span style={{ fontSize: '11px', padding: '4px 10px', color: C.textDim }}>"{preview.description}"</span>}
               </div>
+              {preview.learnedSuggestion && (
+                <div style={{ fontSize: '11px', color: C.textMuted, marginBottom: '12px', fontStyle: 'italic' }}>
+                  ✦ Suggested from your past entries
+                </div>
+              )}
               <button onClick={confirmSave} className="btn-press" style={{
                 width: '100%', padding: '14px', background: C.accent, color: C.bg, border: 'none', borderRadius: '10px',
                 fontSize: '13px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', cursor: 'pointer',
@@ -1216,6 +1230,26 @@ const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, on
         )}
 
         <div style={{ marginTop: '32px', padding: '20px', background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px' }}>
+          <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '12px', fontWeight: 600 }}>Auto-categorization memory</div>
+          {(() => {
+            const stats = memoryStats(buildMemory(txns));
+            if (stats.tokenCount === 0) {
+              return <div style={{ fontSize: '12px', color: C.textMuted, lineHeight: 1.5 }}>
+                The app learns from every transaction you save. Words you use map to categories you pick. Once you have a few entries, similar future entries will auto-categorize correctly. Currently: no entries to learn from.
+              </div>;
+            }
+            return <div style={{ fontSize: '12px', color: C.textDim, lineHeight: 1.6 }}>
+              <div>Words learned: <span className="num" style={{ color: C.text }}>{stats.tokenCount}</span></div>
+              <div>Categories seen: <span className="num" style={{ color: C.text }}>{stats.categoryCount}</span></div>
+              <div>Total mappings: <span className="num" style={{ color: C.text }}>{stats.totalMappings}</span></div>
+              <div style={{ marginTop: '10px', fontSize: '11px', color: C.textMuted, fontStyle: 'italic' }}>
+                Each time you correct a category, the system learns. After 2-3 corrections per word, it overrides defaults.
+              </div>
+            </div>;
+          })()}
+        </div>
+
+        <div style={{ marginTop: '16px', padding: '20px', background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px' }}>
           <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '12px', fontWeight: 600 }}>Your data</div>
           <button onClick={() => exportCSV(txns)} className="btn-press" style={{
             width: '100%', padding: '12px', background: 'transparent',
@@ -1299,6 +1333,8 @@ export default function App() {
     });
   };
 
+  const memory = useMemo(() => buildMemory(txns), [txns]);
+
   if (!loaded) {
     return <div style={{ minHeight: '100vh', background: C.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <Loader2 className="animate-spin" style={{ color: C.textDim }} />
@@ -1310,7 +1346,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: "'Instrument Sans', -apple-system, sans-serif", fontSize: '14px' }}>
-      {screen === 'today' && <Today txns={txns} onAdd={addTxn} onUndo={undoDelete} lastDeleted={lastDeleted} onNav={nav} budgets={budgets} onEdit={setEditingTxn} onManualAdd={startManualAdd} />}
+      {screen === 'today' && <Today txns={txns} onAdd={addTxn} onUndo={undoDelete} lastDeleted={lastDeleted} onNav={nav} budgets={budgets} onEdit={setEditingTxn} onManualAdd={startManualAdd} memory={memory} />}
       {screen === 'cfo' && <CFOAsk txns={txns} budgets={budgets} onBack={back} />}
       {screen === 'stats' && <Stats txns={txns} onBack={back} onEdit={setEditingTxn} budgets={budgets} onNav={nav} />}
       {screen === 'insights' && <Insights txns={txns} budgets={budgets} onBack={() => setScreen('stats')} />}
