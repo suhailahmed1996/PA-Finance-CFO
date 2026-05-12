@@ -1,84 +1,64 @@
-# CFO Ledger
+# CFO Ledger (Offline)
 
-A personal finance tracker with an AI CFO built in. Logs daily transactions, tracks business and personal money separately, alerts on budget overruns, and answers your money questions in plain English.
+A personal finance tracker with a built-in CFO. No API keys. No internet required after install. Everything runs in your browser.
 
-Single-file React app. Dark editorial design. Mobile-friendly.
+## What's inside
 
-## Features
+- **Natural language transaction logging.** Type "spent 500 on lunch" and it parses, categorizes, and saves.
+- **Rule-based CFO engine.** 20+ financial diagnostic rules that analyze your real numbers and give specific actions. No AI, no API.
+- **Financial calculators.** SIP, EMI, retirement, tax (FY 2024-25 new regime).
+- **Knowledge base.** 12 deep-dive articles on Indian personal finance: savings rate, emergency fund, PPF, NPS, mutual funds, debt payoff, business pricing, real return, and more.
+- **Daily logging.** Streak counter, today/month views, edit anything, undo deletes.
+- **Recurring transactions.** Rent, EMI, salary auto-log monthly when you open the app.
+- **Budgets per category.** Soft warnings at 80%, alerts at 100%, surfaced on the home screen.
+- **Search across all transactions.** By description, category, scope.
+- **CSV export.** Your data, always portable.
+- **Business vs personal split.** Tracks both separately. Margins, profit, runway.
 
-- Natural language transaction logging ("spent 500 on lunch")
-- AI CFO chat that reads your real numbers and gives sharp, contextual advice
-- Daily streak counter
-- Business vs personal split tracking
-- Budget caps per category with 80% and 100% alerts on the home screen
-- Recurring transactions (rent, EMI, salary auto-log)
-- Search across all transactions
-- Edit any transaction
-- CSV export
-- Undo for accidental deletes
-- All data persists in browser localStorage
-
-## Setup
+## How to run
 
 You need Node.js 18+ installed. Get it from https://nodejs.org.
 
 ```bash
-# Install dependencies
+cd cfo-ledger-offline
 npm install
-
-# Add your Anthropic API key
-cp .env.example .env
-# Edit .env and paste your key from https://console.anthropic.com/
-
-# Run the dev server
 npm run dev
 ```
 
 Opens at http://localhost:5173.
 
-## Security warning: API key in frontend
+That's it. No API keys to configure. No `.env` file to create. Everything is in the code.
 
-This setup puts your Anthropic API key directly in the browser bundle. Anyone who opens the deployed site can read the key from the source and use it to drain your account credits.
+## How it works
 
-**This is fine for local development only.** Do not deploy this anywhere public without first routing the API calls through your own backend.
+The "CFO" is not AI. It is around 20 deterministic rules in `src/cfo.js` that examine your transactions and fire when conditions match. Each rule returns a headline, an explanation, and one specific action.
 
-To deploy publicly:
+The transaction parser in `src/parser.js` uses pattern matching: extracting amounts with regex, mapping keywords to categories, detecting income vs expense from verbs. It is not as flexible as an AI parser, but it handles the 95% case and never costs you a paisa.
 
-1. Build a thin backend (Express, Hono, Cloudflare Worker, Vercel Serverless Function, etc) that holds the API key server-side
-2. Expose two endpoints: `/api/parse-transaction` and `/api/cfo-chat`
-3. Replace the `callClaude` function in `src/api.js` with calls to your endpoints
-4. Remove `VITE_ANTHROPIC_API_KEY` and the `anthropic-dangerous-direct-browser-access` header
+The formula library in `src/formulas.js` has every calculation a CFO actually uses: compound interest, SIP future value, EMI, retirement corpus, break-even, LTV/CAC, real return, Indian tax. All pure functions.
 
-A minimal Cloudflare Worker proxy is about 30 lines of code.
+The knowledge base in `src/knowledge.js` is plain text articles on Indian personal finance. Read it like a book.
 
-## Data storage
+## What it cannot do
 
-All your data lives in browser `localStorage` under keys prefixed with `cfo-ledger:`.
-
-Means:
-- Data is per-browser and per-device. Clearing browser data wipes the app.
-- No cloud sync. Export to CSV regularly if your data matters.
-- No multi-user support. The browser session is the user.
-
-If you want sync, migrate the `Storage` module in `src/storage.js` to call a backend (Supabase, Firebase, Neon, your own API) instead of localStorage.
+A rule-based CFO cannot have a free-form conversation. If you ask it something off-topic, it falls back to the most relevant brief. It also cannot detect novel patterns the rules don't cover. The trade-off is: it always works, never costs, never goes down, and never hallucinates a fact.
 
 ## File structure
 
 ```
-cfo-ledger/
+cfo-ledger-offline/
 ├── package.json
 ├── vite.config.js
 ├── index.html
-├── .env.example
-├── .gitignore
 └── src/
-    ├── main.jsx        # React entry point
-    ├── App.jsx         # The whole app
-    ├── api.js          # Anthropic API client
-    └── storage.js      # localStorage wrapper
+    ├── main.jsx          React entry
+    ├── App.jsx           All UI screens
+    ├── parser.js         Natural language transaction parser
+    ├── formulas.js       Financial formula library
+    ├── cfo.js            Rule-based CFO engine
+    ├── knowledge.js      Indian personal finance knowledge base
+    └── storage.js        localStorage adapter
 ```
-
-The entire app is in `App.jsx`. About 800 lines. No external state management, no routing library, just useState and a switch statement.
 
 ## Build for production
 
@@ -86,18 +66,18 @@ The entire app is in `App.jsx`. About 800 lines. No external state management, n
 npm run build
 ```
 
-Output goes to `dist/`. Serve it with any static host (Vercel, Netlify, Cloudflare Pages, S3, your own nginx). Remember the API key warning above.
+Output goes to `dist/`. Serve from any static host. No backend needed, no API keys to protect.
 
 ## Customizing
 
-**Currency:** This app is hardcoded to INR. Search `₹` and `INR` in `App.jsx` to localize.
+**Add a new CFO rule:** edit `src/cfo.js`, add an object to the `rules` array. Each rule has `id`, `severity`, `check(state)`, and `say(state)`. The `state` object has all the metrics computed for you.
 
-**Categories:** Edit the `PERSONAL_EXPENSE_CATS`, `BUSINESS_EXPENSE_CATS`, `PERSONAL_INCOME_CATS`, `BUSINESS_INCOME_CATS` constants at the top of `App.jsx`.
+**Add a category:** edit the `*_EXPENSE_CATS` or `*_INCOME_CATS` arrays in `App.jsx`. Also add keywords to `CATEGORY_KEYWORDS` in `parser.js` if you want the parser to detect them.
 
-**CFO personality:** Edit the `buildCFOSystem` function. The prompt is short and the rules are explicit so you can tune it without breaking things.
+**Add a knowledge article:** edit `src/knowledge.js`, append an entry with `id`, `topic`, `short`, `body`.
 
-**Colors:** All in the `C` object at the top of `App.jsx`. Light theme is left as an exercise.
+**Add a calculator:** edit the `Tools` component in `App.jsx`. Use the formulas from `src/formulas.js`.
 
 ## License
 
-Yours. Do what you want with it.
+Yours. Use it. Modify it. Ship it.

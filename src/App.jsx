@@ -1,37 +1,31 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  Send, Loader2, Sparkles, Check, X, MessageSquare, BarChart3,
-  ArrowLeft, Trash2, Undo2, Flame, Search, Download, Repeat,
-  AlertTriangle, Settings, ChevronRight, Plus
+  Send, Check, X, MessageSquare, BarChart3, ArrowLeft, Trash2, Undo2,
+  Flame, Search, Download, Repeat, AlertTriangle, Settings,
+  ChevronRight, Plus, Calculator, BookOpen, Sparkles, TrendingUp, Loader2
 } from 'lucide-react';
-import './storage.js';
-import { callClaude } from './api.js';
+import { S } from './storage.js';
+import { parseTransaction } from './parser.js';
+import * as F from './formulas.js';
+import { analyze, brief, answer, getSuggestedQuestions } from './cfo.js';
+import { KNOWLEDGE } from './knowledge.js';
 
 const C = {
-  bg: '#0F0E0C',
-  panel: '#1A1815',
-  panelHi: '#221F1B',
-  border: '#2A2722',
-  borderHi: '#3A352E',
-  text: '#F2EDE4',
-  textDim: '#9A938A',
-  textMuted: '#5C5750',
-  accent: '#E8A84C',
-  accentDim: '#8C6B30',
-  positive: '#7DBE93',
-  negative: '#E07B7B',
-  warm: '#D49C5A'
+  bg: '#0F0E0C', panel: '#1A1815', panelHi: '#221F1B',
+  border: '#2A2722', borderHi: '#3A352E',
+  text: '#F2EDE4', textDim: '#9A938A', textMuted: '#5C5750',
+  accent: '#E8A84C', accentDim: '#8C6B30',
+  positive: '#7DBE93', negative: '#E07B7B', warm: '#D49C5A',
+  info: '#7A9DC8'
 };
 
 const FONTS_CSS = `
-  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,800;9..144,900&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body { margin: 0; background: ${C.bg}; }
   .display { font-family: 'Fraunces', Georgia, serif; font-variation-settings: 'opsz' 144; letter-spacing: -0.03em; }
-  .body { font-family: 'Instrument Sans', -apple-system, sans-serif; }
   .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
   ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 3px; }
   input, textarea, button, select { font-family: inherit; }
   input:focus, textarea:focus, button:focus, select:focus { outline: none; }
@@ -39,10 +33,6 @@ const FONTS_CSS = `
   .fade-up { animation: fadeUp 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
   @keyframes pop { 0% { transform: scale(0.9); opacity: 0; } 60% { transform: scale(1.05); } 100% { transform: scale(1); opacity: 1; } }
   .pop { animation: pop 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
-  @keyframes flicker { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-  .flicker { animation: flicker 2s ease-in-out infinite; }
-  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
-  .shimmer { background: linear-gradient(90deg, transparent, ${C.borderHi}, transparent); background-size: 200% 100%; animation: shimmer 2s linear infinite; }
   .btn-press:active { transform: scale(0.97); }
   .btn-press { transition: transform 0.1s; }
   .modal-bg { animation: fadeUp 0.2s ease-out both; }
@@ -51,14 +41,7 @@ const FONTS_CSS = `
 `;
 
 const today = () => new Date().toISOString().split('T')[0];
-const fmt = (n) => {
-  if (n == null || isNaN(n)) return '₹0';
-  const abs = Math.abs(n);
-  if (abs >= 10000000) return `₹${(n / 10000000).toFixed(1)}Cr`;
-  if (abs >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
-  if (abs >= 1000) return `₹${(n / 1000).toFixed(1)}k`;
-  return `₹${Math.round(n)}`;
-};
+const fmt = F.inr;
 const fmtFull = (n) => `₹${Math.round(n || 0).toLocaleString('en-IN')}`;
 const greeting = () => {
   const h = new Date().getHours();
@@ -73,31 +56,6 @@ const BUSINESS_EXPENSE_CATS = ['Software', 'Marketing', 'Travel', 'Office', 'Equ
 const PERSONAL_INCOME_CATS = ['Salary', 'Freelance', 'Investment', 'Rental', 'Gift', 'Other Personal'];
 const BUSINESS_INCOME_CATS = ['Sales', 'Service Revenue', 'Recurring Revenue', 'Other Business'];
 
-const S = {
-  async get(key, def) {
-    try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : def; }
-    catch { return def; }
-  },
-  async set(key, val) {
-    try { await window.storage.set(key, JSON.stringify(val)); } catch {}
-  }
-};
-
-const parseTxnSystem = `Parse a financial transaction. Currency INR, India.
-Output ONLY valid JSON: { "type": "income"|"expense", "amount": number, "category": string, "scope": "personal"|"business", "description": string }
-Personal expense cats: ${PERSONAL_EXPENSE_CATS.join(', ')}.
-Business expense cats: ${BUSINESS_EXPENSE_CATS.join(', ')}.
-Personal income: ${PERSONAL_INCOME_CATS.join(', ')}.
-Business income: ${BUSINESS_INCOME_CATS.join(', ')}.
-Default scope personal. "client"/"work" hints business.`;
-
-const buildCFOSystem = (todayStats, monthStats, txns, budgets) => `You are a CFO advising an ADHD entrepreneur. Currency INR. India.
-Rules: ONE action per response. Under 80 words. Plain language. Lead with the headline. Push income growth over expense cutting. Indian context (PPF, NPS, ELSS, FD, mutual funds, GST). End every response with one concrete action under 10 minutes.
-TODAY: ${JSON.stringify(todayStats)}
-MONTH: ${JSON.stringify(monthStats)}
-BUDGETS: ${JSON.stringify(budgets)}
-RECENT TXNS: ${JSON.stringify(txns.slice(0, 15).map(t => ({d: t.date, type: t.type, amt: t.amount, cat: t.category, scope: t.scope})))}`;
-
 const calcStreak = (txns) => {
   if (txns.length === 0) return 0;
   const dates = new Set(txns.map(t => t.date));
@@ -107,8 +65,7 @@ const calcStreak = (txns) => {
   else { d.setDate(d.getDate() - 1); }
   while (true) {
     const ds = d.toISOString().split('T')[0];
-    if (dates.has(ds)) { streak++; d.setDate(d.getDate() - 1); }
-    else break;
+    if (dates.has(ds)) { streak++; d.setDate(d.getDate() - 1); } else break;
   }
   return streak;
 };
@@ -133,15 +90,9 @@ const processRecurring = (recurring, txns) => {
       if (!exists) {
         newTxns.push({
           id: Date.now().toString() + Math.random().toString(36).substring(2, 7),
-          date: dateStr,
-          type: r.type,
-          scope: r.scope,
-          amount: r.amount,
-          category: r.category,
-          classification: r.type === 'expense' ? 'need' : 'active',
-          description: r.description + ' (auto)',
-          recurringId: r.id,
-          createdAt: Date.now()
+          date: dateStr, type: r.type, scope: r.scope, amount: r.amount,
+          category: r.category, classification: r.type === 'expense' ? 'need' : 'active',
+          description: r.description + ' (auto)', recurringId: r.id, createdAt: Date.now()
         });
         applied = true;
       }
@@ -154,26 +105,54 @@ const processRecurring = (recurring, txns) => {
 
 const exportCSV = (txns) => {
   const headers = ['Date', 'Type', 'Scope', 'Amount', 'Category', 'Description'];
-  const rows = txns.map(t => [
-    t.date, t.type, t.scope, t.amount, t.category,
-    `"${(t.description || '').replace(/"/g, '""')}"`
-  ]);
+  const rows = txns.map(t => [t.date, t.type, t.scope, t.amount, t.category, `"${(t.description || '').replace(/"/g, '""')}"`]);
   const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url;
-  a.download = `cfo-ledger-${today()}.csv`;
-  a.click();
+  a.href = url; a.download = `cfo-ledger-${today()}.csv`; a.click();
   URL.revokeObjectURL(url);
 };
+
+const severityColor = {
+  critical: C.negative, warning: C.warm, info: C.info, positive: C.positive
+};
+const severityLabel = {
+  critical: 'CRITICAL', warning: 'WARNING', info: 'INFO', positive: 'STRENGTH'
+};
+
+// ============================================================
+// FINDING CARD (used by CFO and Insights)
+// ============================================================
+const FindingCard = ({ finding }) => (
+  <div className="fade-up" style={{
+    background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px',
+    padding: '18px 20px', marginBottom: '10px', position: 'relative', overflow: 'hidden'
+  }}>
+    <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px', background: severityColor[finding.severity] }} />
+    <div style={{ fontSize: '9px', color: severityColor[finding.severity], textTransform: 'uppercase', letterSpacing: '0.2em', fontWeight: 700, marginBottom: '8px' }}>
+      {severityLabel[finding.severity]}
+    </div>
+    <div className="display" style={{ fontSize: '16px', color: C.text, fontWeight: 600, lineHeight: 1.3, marginBottom: '8px' }}>
+      {finding.headline}
+    </div>
+    {finding.detail && (
+      <div style={{ fontSize: '13px', color: C.textDim, lineHeight: 1.5, marginBottom: '10px' }}>{finding.detail}</div>
+    )}
+    {finding.action && (
+      <div style={{ background: C.panelHi, borderRadius: '8px', padding: '12px 14px', borderLeft: `2px solid ${C.accent}` }}>
+        <div style={{ fontSize: '9px', color: C.accent, textTransform: 'uppercase', letterSpacing: '0.15em', fontWeight: 700, marginBottom: '4px' }}>Do this</div>
+        <div style={{ fontSize: '13px', color: C.text, lineHeight: 1.5 }}>{finding.action}</div>
+      </div>
+    )}
+  </div>
+);
 
 // ============================================================
 // EDIT MODAL
 // ============================================================
 const EditModal = ({ txn, onSave, onClose, onDelete }) => {
   const [t, setT] = useState({ ...txn });
-  if (!t) return null;
   const cats = t.type === 'income'
     ? (t.scope === 'business' ? BUSINESS_INCOME_CATS : PERSONAL_INCOME_CATS)
     : (t.scope === 'business' ? BUSINESS_EXPENSE_CATS : PERSONAL_EXPENSE_CATS);
@@ -193,53 +172,44 @@ const EditModal = ({ txn, onSave, onClose, onDelete }) => {
             <X size={18} />
           </button>
         </div>
-
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-          <button onClick={() => setT({ ...t, type: 'expense' })} className="btn-press" style={{
-            padding: '10px', background: t.type === 'expense' ? C.negative : 'transparent',
-            color: t.type === 'expense' ? C.bg : C.textDim, border: `1px solid ${t.type === 'expense' ? C.negative : C.border}`,
-            borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em'
-          }}>Expense</button>
-          <button onClick={() => setT({ ...t, type: 'income' })} className="btn-press" style={{
-            padding: '10px', background: t.type === 'income' ? C.positive : 'transparent',
-            color: t.type === 'income' ? C.bg : C.textDim, border: `1px solid ${t.type === 'income' ? C.positive : C.border}`,
-            borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em'
-          }}>Income</button>
+          {['expense', 'income'].map(tp => (
+            <button key={tp} onClick={() => setT({ ...t, type: tp })} className="btn-press" style={{
+              padding: '10px', background: t.type === tp ? (tp === 'income' ? C.positive : C.negative) : 'transparent',
+              color: t.type === tp ? C.bg : C.textDim,
+              border: `1px solid ${t.type === tp ? (tp === 'income' ? C.positive : C.negative) : C.border}`,
+              borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em'
+            }}>{tp}</button>
+          ))}
         </div>
-
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '16px' }}>
-          <button onClick={() => setT({ ...t, scope: 'personal' })} className="btn-press" style={{
-            padding: '10px', background: t.scope === 'personal' ? C.accent : 'transparent',
-            color: t.scope === 'personal' ? C.bg : C.textDim, border: `1px solid ${t.scope === 'personal' ? C.accent : C.border}`,
-            borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600
-          }}>Personal</button>
-          <button onClick={() => setT({ ...t, scope: 'business' })} className="btn-press" style={{
-            padding: '10px', background: t.scope === 'business' ? C.accent : 'transparent',
-            color: t.scope === 'business' ? C.bg : C.textDim, border: `1px solid ${t.scope === 'business' ? C.accent : C.border}`,
-            borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600
-          }}>Business</button>
+          {['personal', 'business'].map(sc => (
+            <button key={sc} onClick={() => setT({ ...t, scope: sc })} className="btn-press" style={{
+              padding: '10px', background: t.scope === sc ? C.accent : 'transparent',
+              color: t.scope === sc ? C.bg : C.textDim,
+              border: `1px solid ${t.scope === sc ? C.accent : C.border}`,
+              borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, textTransform: 'capitalize'
+            }}>{sc}</button>
+          ))}
         </div>
-
-        <label style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px', display: 'block', fontWeight: 600 }}>Amount</label>
-        <input type="number" value={t.amount} onChange={(e) => setT({ ...t, amount: parseFloat(e.target.value) || 0 })}
-          className="num"
-          style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px 16px', color: C.text, fontSize: '20px', marginBottom: '12px', fontWeight: 500 }} />
-
-        <label style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px', display: 'block', fontWeight: 600 }}>Date</label>
-        <input type="date" value={t.date} onChange={(e) => setT({ ...t, date: e.target.value })}
-          style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px 16px', color: C.text, fontSize: '14px', marginBottom: '12px' }} />
-
-        <label style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px', display: 'block', fontWeight: 600 }}>Category</label>
-        <select value={t.category} onChange={(e) => setT({ ...t, category: e.target.value })}
-          style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px 16px', color: C.text, fontSize: '14px', marginBottom: '12px' }}>
-          {cats.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
-
-        <label style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px', display: 'block', fontWeight: 600 }}>Description</label>
-        <input type="text" value={t.description || ''} onChange={(e) => setT({ ...t, description: e.target.value })}
-          style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px 16px', color: C.text, fontSize: '14px', marginBottom: '20px' }} />
-
-        <div style={{ display: 'flex', gap: '8px' }}>
+        {[
+          { label: 'Amount', el: <input type="number" value={t.amount} onChange={(e) => setT({ ...t, amount: parseFloat(e.target.value) || 0 })} className="num"
+              style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px 16px', color: C.text, fontSize: '20px', fontWeight: 500 }} /> },
+          { label: 'Date', el: <input type="date" value={t.date} onChange={(e) => setT({ ...t, date: e.target.value })}
+              style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px 16px', color: C.text, fontSize: '14px' }} /> },
+          { label: 'Category', el: <select value={t.category} onChange={(e) => setT({ ...t, category: e.target.value })}
+              style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px 16px', color: C.text, fontSize: '14px' }}>
+              {cats.map(c => <option key={c} value={c}>{c}</option>)}
+            </select> },
+          { label: 'Description', el: <input type="text" value={t.description || ''} onChange={(e) => setT({ ...t, description: e.target.value })}
+              style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '12px 16px', color: C.text, fontSize: '14px' }} /> }
+        ].map(({ label, el }) => (
+          <div key={label} style={{ marginBottom: '12px' }}>
+            <label style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px', display: 'block', fontWeight: 600 }}>{label}</label>
+            {el}
+          </div>
+        ))}
+        <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
           <button onClick={() => onDelete(t.id)} className="btn-press" style={{
             padding: '14px', background: 'transparent', color: C.negative,
             border: `1px solid ${C.negative}`, borderRadius: '10px', cursor: 'pointer', fontSize: '13px', fontWeight: 600,
@@ -248,9 +218,8 @@ const EditModal = ({ txn, onSave, onClose, onDelete }) => {
             <Trash2 size={14} /> Delete
           </button>
           <button onClick={() => onSave(t)} className="btn-press" style={{
-            flex: 1, padding: '14px', background: C.accent, color: C.bg,
-            border: 'none', borderRadius: '10px', cursor: 'pointer', fontSize: '13px', fontWeight: 600,
-            textTransform: 'uppercase', letterSpacing: '0.1em'
+            flex: 1, padding: '14px', background: C.accent, color: C.bg, border: 'none', borderRadius: '10px',
+            cursor: 'pointer', fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em'
           }}>Save changes</button>
         </div>
       </div>
@@ -261,26 +230,22 @@ const EditModal = ({ txn, onSave, onClose, onDelete }) => {
 // ============================================================
 // TODAY SCREEN
 // ============================================================
-const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpenSettings, budgets, onEdit }) => {
+const Today = ({ txns, onAdd, onUndo, lastDeleted, onNav, budgets, onEdit }) => {
   const [input, setInput] = useState('');
-  const [parsing, setParsing] = useState(false);
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState('');
   const [justSaved, setJustSaved] = useState(false);
-  const [insight, setInsight] = useState('');
-  const [insightLoading, setInsightLoading] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
+  const month = today().slice(0, 7);
   const todayTxns = txns.filter(t => t.date === today());
   const todayIn = todayTxns.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
   const todayOut = todayTxns.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
   const todayNet = todayIn - todayOut;
   const streak = useMemo(() => calcStreak(txns), [txns]);
-  const monthTxns = txns.filter(t => t.date.startsWith(today().slice(0, 7)));
-  const monthIn = monthTxns.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const monthOut = monthTxns.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+  const monthTxns = txns.filter(t => t.date.startsWith(month));
 
   const budgetAlerts = useMemo(() => {
     const alerts = [];
@@ -294,42 +259,24 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpe
     return alerts.sort((a, b) => b.pct - a.pct);
   }, [monthTxns, budgets]);
 
-  useEffect(() => {
-    if (monthTxns.length < 3 || insight || insightLoading) return;
-    setInsightLoading(true);
-    callClaude(
-      buildCFOSystem(
-        { income: todayIn, expense: todayOut, net: todayNet, count: todayTxns.length },
-        { income: monthIn, expense: monthOut, net: monthIn - monthOut, count: monthTxns.length },
-        txns, budgets
-      ),
-      [{ role: 'user', content: 'Give me the single most important thing about my money right now. Under 50 words. End with one action today.' }],
-      300
-    ).then(setInsight).catch(() => setInsight('')).finally(() => setInsightLoading(false));
-  }, [monthTxns.length]);
+  const cfoBrief = useMemo(() => brief(txns, month, budgets), [txns, month, budgets]);
 
-  const handleParse = async () => {
-    if (!input.trim() || parsing) return;
-    setParsing(true); setError('');
-    try {
-      const result = await callClaude(parseTxnSystem, [{ role: 'user', content: input }], 250);
-      const parsed = JSON.parse(result.replace(/```json|```/g, '').trim());
-      if (!parsed.amount || !parsed.type) throw new Error();
-      setPreview(parsed);
-    } catch { setError("Couldn't read that. Try again."); }
-    finally { setParsing(false); }
+  const handleParse = () => {
+    if (!input.trim()) return;
+    setError('');
+    const parsed = parseTransaction(input);
+    if (parsed.error) { setError(parsed.error); return; }
+    setPreview(parsed);
   };
 
   const confirmSave = () => {
     onAdd({
       id: Date.now().toString(),
       date: today(),
-      type: preview.type,
-      scope: preview.scope || 'personal',
-      amount: preview.amount,
-      category: preview.category || 'Other',
+      type: preview.type, scope: preview.scope, amount: preview.amount,
+      category: preview.category,
       classification: preview.type === 'expense' ? 'want' : 'active',
-      description: preview.description || input,
+      description: preview.description,
       createdAt: Date.now()
     });
     setInput(''); setPreview(null); setJustSaved(true);
@@ -338,9 +285,8 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpe
   };
 
   return (
-    <div style={{ minHeight: '100vh', padding: '20px 20px 60px' }}>
+    <div style={{ minHeight: '100vh', padding: '20px 20px 100px' }}>
       <div style={{ maxWidth: '560px', margin: '0 auto' }}>
-
         <div className="fade-up" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '16px', marginBottom: '28px' }}>
           <div>
             <div style={{ fontSize: '13px', color: C.textDim }}>{greeting()}.</div>
@@ -356,7 +302,7 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpe
                 <span style={{ fontSize: '11px', color: C.textDim, textTransform: 'uppercase', letterSpacing: '0.1em' }}>d</span>
               </div>
             )}
-            <button onClick={onOpenSettings} className="btn-press" style={{
+            <button onClick={() => onNav('settings')} className="btn-press" style={{
               padding: '10px', background: C.panel, border: `1px solid ${C.border}`, borderRadius: '50%',
               color: C.textDim, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'
             }}>
@@ -383,10 +329,10 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpe
         </div>
 
         {budgetAlerts.length > 0 && (
-          <div className="fade-up" style={{ marginBottom: '24px' }}>
+          <div className="fade-up" style={{ marginBottom: '20px' }}>
             {budgetAlerts.slice(0, 2).map(a => (
               <div key={a.cat} style={{
-                background: a.level === 'over' ? 'rgba(224, 123, 123, 0.08)' : 'rgba(212, 156, 90, 0.08)',
+                background: a.level === 'over' ? 'rgba(224,123,123,0.08)' : 'rgba(212,156,90,0.08)',
                 border: `1px solid ${a.level === 'over' ? C.negative : C.warm}`,
                 borderRadius: '12px', padding: '14px 18px', marginBottom: '8px',
                 display: 'flex', alignItems: 'center', gap: '12px'
@@ -412,15 +358,14 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpe
                 onChange={(e) => { setInput(e.target.value); setError(''); }}
                 onKeyDown={(e) => e.key === 'Enter' && handleParse()}
                 placeholder="spent 500 on lunch · got paid 25000"
-                disabled={parsing}
                 style={{
                   width: '100%', background: C.panel,
                   border: `2px solid ${input ? C.accent : C.border}`,
                   borderRadius: '14px', color: C.text,
                   padding: '22px 70px 22px 22px', fontSize: '17px',
-                  transition: 'border-color 0.2s', fontFamily: 'inherit'
+                  transition: 'border-color 0.2s'
                 }} />
-              <button onClick={handleParse} disabled={!input.trim() || parsing} className="btn-press" style={{
+              <button onClick={handleParse} disabled={!input.trim()} className="btn-press" style={{
                 position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
                 width: '46px', height: '46px',
                 background: input.trim() ? C.accent : C.border,
@@ -429,7 +374,7 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpe
                 cursor: input.trim() ? 'pointer' : 'not-allowed',
                 display: 'flex', alignItems: 'center', justifyContent: 'center'
               }}>
-                {parsing ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+                <Send size={18} />
               </button>
             </div>
           )}
@@ -455,9 +400,8 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpe
                 {preview.description && <span style={{ fontSize: '11px', padding: '4px 10px', color: C.textDim }}>"{preview.description}"</span>}
               </div>
               <button onClick={confirmSave} className="btn-press" style={{
-                width: '100%', padding: '14px', background: C.accent, color: C.bg,
-                border: 'none', borderRadius: '10px', fontSize: '13px', fontWeight: 600,
-                letterSpacing: '0.1em', textTransform: 'uppercase', cursor: 'pointer',
+                width: '100%', padding: '14px', background: C.accent, color: C.bg, border: 'none', borderRadius: '10px',
+                fontSize: '13px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
               }}>
                 <Check size={16} /> Save it
@@ -491,20 +435,14 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpe
           )}
         </div>
 
-        {(insight || insightLoading) && monthTxns.length >= 3 && (
-          <div className="fade-up" style={{
-            background: C.panel, border: `1px solid ${C.border}`, borderRadius: '14px',
-            padding: '20px 24px', marginBottom: '24px', position: 'relative', overflow: 'hidden'
-          }}>
-            <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px', background: C.accent }} />
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
-              <Sparkles size={12} style={{ color: C.accent }} />
-              <span style={{ fontSize: '10px', color: C.accent, textTransform: 'uppercase', letterSpacing: '0.2em', fontWeight: 600 }}>Your CFO says</span>
-            </div>
-            {insightLoading ? <div style={{ height: '60px', borderRadius: '6px' }} className="shimmer" /> :
-              <div className="display" style={{ fontSize: '16px', color: C.text, lineHeight: 1.5, fontWeight: 500 }}>{insight}</div>}
+        {/* CFO Brief */}
+        <div className="fade-up" style={{ marginBottom: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+            <Sparkles size={12} style={{ color: C.accent }} />
+            <span style={{ fontSize: '10px', color: C.accent, textTransform: 'uppercase', letterSpacing: '0.2em', fontWeight: 600 }}>Your CFO says</span>
           </div>
-        )}
+          <FindingCard finding={{ ...cfoBrief, severity: cfoBrief.severity || 'info' }} />
+        </div>
 
         {todayTxns.length > 0 && (
           <div className="fade-up" style={{ marginBottom: '24px' }}>
@@ -531,21 +469,21 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpe
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: '10px', marginTop: '28px' }}>
-          <button onClick={onOpenStats} className="btn-press" style={{
-            flex: 1, padding: '14px', background: C.panel, border: `1px solid ${C.border}`,
-            borderRadius: '10px', color: C.text, fontSize: '13px', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
-          }}>
-            <BarChart3 size={14} /> See month
-          </button>
-          <button onClick={onOpenCFO} className="btn-press" style={{
-            flex: 1, padding: '14px', background: C.panel, border: `1px solid ${C.border}`,
-            borderRadius: '10px', color: C.text, fontSize: '13px', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
-          }}>
-            <MessageSquare size={14} /> Ask the CFO
-          </button>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '24px' }}>
+          {[
+            { id: 'stats', icon: BarChart3, label: 'Month' },
+            { id: 'cfo', icon: MessageSquare, label: 'CFO' },
+            { id: 'tools', icon: Calculator, label: 'Tools' },
+            { id: 'learn', icon: BookOpen, label: 'Learn' }
+          ].map(({ id, icon: Icon, label }) => (
+            <button key={id} onClick={() => onNav(id)} className="btn-press" style={{
+              padding: '14px', background: C.panel, border: `1px solid ${C.border}`,
+              borderRadius: '10px', color: C.text, fontSize: '13px', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
+            }}>
+              <Icon size={14} /> {label}
+            </button>
+          ))}
         </div>
       </div>
     </div>
@@ -553,41 +491,24 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onOpenCFO, onOpenStats, onOpe
 };
 
 // ============================================================
-// CFO CHAT
+// CFO ASK SCREEN
 // ============================================================
-const CFOChat = ({ txns, history, setHistory, onBack, budgets }) => {
+const CFOAsk = ({ txns, budgets, onBack }) => {
+  const [history, setHistory] = useState([]);
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
-
-  const todayTxns = txns.filter(t => t.date === today());
-  const monthTxns = txns.filter(t => t.date.startsWith(today().slice(0, 7)));
-
-  const suggestions = ['What should I focus on today?', 'Where am I leaking money?', 'How do I grow my income?', 'Grade me this month'];
+  const month = today().slice(0, 7);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
-  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [history, loading]);
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [history]);
 
-  const send = async (msg) => {
-    const m = msg || input;
-    if (!m.trim() || loading) return;
-    const newHist = [...history, { role: 'user', content: m }];
-    setHistory(newHist); setInput(''); setLoading(true);
-    try {
-      const todayIn = todayTxns.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-      const todayOut = todayTxns.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-      const monthIn = monthTxns.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-      const monthOut = monthTxns.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-      const sys = buildCFOSystem(
-        { income: todayIn, expense: todayOut, net: todayIn - todayOut, count: todayTxns.length },
-        { income: monthIn, expense: monthOut, net: monthIn - monthOut, count: monthTxns.length },
-        txns, budgets
-      );
-      const r = await callClaude(sys, newHist, 600);
-      setHistory([...newHist, { role: 'assistant', content: r }]);
-    } catch { setHistory([...newHist, { role: 'assistant', content: 'Lost connection. Try again.' }]); }
-    finally { setLoading(false); }
+  const ask = (q) => {
+    const question = q || input;
+    if (!question.trim()) return;
+    const reply = answer(question, txns, month, budgets);
+    setHistory([...history, { question, reply }]);
+    setInput('');
   };
 
   return (
@@ -596,48 +517,46 @@ const CFOChat = ({ txns, history, setHistory, onBack, budgets }) => {
         <button onClick={onBack} className="btn-press" style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer', padding: '4px' }}>
           <ArrowLeft size={20} />
         </button>
-        <div>
+        <div style={{ flex: 1 }}>
           <div className="display" style={{ fontSize: '18px', color: C.text, fontWeight: 600 }}>Your CFO</div>
-          <div style={{ fontSize: '11px', color: C.textDim }}>Sees every transaction. Says what matters.</div>
+          <div style={{ fontSize: '11px', color: C.textDim }}>Rules-based. Offline. Sees every transaction.</div>
         </div>
         {history.length > 0 && (
-          <button onClick={() => setHistory([])} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: C.textMuted, fontSize: '12px', cursor: 'pointer' }}>Clear</button>
+          <button onClick={() => setHistory([])} style={{ background: 'transparent', border: 'none', color: C.textMuted, fontSize: '12px', cursor: 'pointer' }}>Clear</button>
         )}
       </div>
 
       <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
         <div style={{ maxWidth: '560px', margin: '0 auto' }}>
           {history.length === 0 ? (
-            <div style={{ paddingTop: '40px' }}>
-              <div className="display" style={{ fontSize: '26px', color: C.text, marginBottom: '8px', fontWeight: 600, lineHeight: 1.2 }}>Ask one question.</div>
-              <div style={{ fontSize: '14px', color: C.textDim, marginBottom: '28px' }}>Get one straight answer with one action.</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {suggestions.map(s => (
-                  <button key={s} onClick={() => send(s)} className="btn-press" style={{
-                    padding: '16px 20px', background: C.panel, border: `1px solid ${C.border}`,
-                    borderRadius: '12px', color: C.text, fontSize: '15px', textAlign: 'left',
+            <div style={{ paddingTop: '24px' }}>
+              <div className="display" style={{ fontSize: '24px', color: C.text, marginBottom: '8px', fontWeight: 600, lineHeight: 1.2 }}>Pick a question.</div>
+              <div style={{ fontSize: '13px', color: C.textDim, marginBottom: '24px' }}>Or type your own. Get one direct answer with one action.</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {getSuggestedQuestions().map(q => (
+                  <button key={q} onClick={() => ask(q)} className="btn-press" style={{
+                    padding: '14px 18px', background: C.panel, border: `1px solid ${C.border}`,
+                    borderRadius: '10px', color: C.text, fontSize: '14px', textAlign: 'left',
                     cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
                   }}>
-                    {s} <ChevronRight size={16} style={{ color: C.textMuted }} />
+                    {q} <ChevronRight size={14} style={{ color: C.textMuted }} />
                   </button>
                 ))}
               </div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              {history.map((m, i) => (
-                <div key={i} className="fade-up" style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                  <div style={{
-                    maxWidth: '85%', padding: '14px 18px',
-                    background: m.role === 'user' ? C.accent : C.panel,
-                    color: m.role === 'user' ? C.bg : C.text,
-                    borderRadius: m.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                    fontSize: '15px', lineHeight: 1.5, whiteSpace: 'pre-wrap',
-                    fontWeight: m.role === 'user' ? 500 : 400
-                  }}>{m.content}</div>
+              {history.map((h, i) => (
+                <div key={i} className="fade-up">
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
+                    <div style={{
+                      maxWidth: '85%', padding: '12px 16px', background: C.accent, color: C.bg,
+                      borderRadius: '14px 14px 4px 14px', fontSize: '14px', fontWeight: 500
+                    }}>{h.question}</div>
+                  </div>
+                  <FindingCard finding={{ ...h.reply, severity: h.reply.severity || 'info' }} />
                 </div>
               ))}
-              {loading && <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: C.textDim, fontSize: '13px' }}><div className="flicker">●</div> thinking</div>}
             </div>
           )}
         </div>
@@ -647,13 +566,13 @@ const CFOChat = ({ txns, history, setHistory, onBack, budgets }) => {
         <div style={{ maxWidth: '560px', margin: '0 auto', display: 'flex', gap: '8px' }}>
           <input ref={inputRef} type="text" value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && send()}
-            placeholder="Type your question..."
-            style={{ flex: 1, background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', color: C.text, padding: '14px 18px', fontSize: '15px' }} />
-          <button onClick={() => send()} disabled={loading || !input.trim()} className="btn-press" style={{
-            width: '52px', background: input.trim() ? C.accent : C.border,
-            color: input.trim() ? C.bg : C.textMuted, border: 'none', borderRadius: '12px',
-            cursor: input.trim() ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center'
+            onKeyDown={(e) => e.key === 'Enter' && ask()}
+            placeholder="Ask about your money..."
+            style={{ flex: 1, background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', color: C.text, padding: '14px 18px', fontSize: '14px' }} />
+          <button onClick={() => ask()} disabled={!input.trim()} className="btn-press" style={{
+            width: '52px', background: input.trim() ? C.accent : C.border, color: input.trim() ? C.bg : C.textMuted,
+            border: 'none', borderRadius: '12px', cursor: input.trim() ? 'pointer' : 'not-allowed',
+            display: 'flex', alignItems: 'center', justifyContent: 'center'
           }}>
             <Send size={18} />
           </button>
@@ -664,23 +583,47 @@ const CFOChat = ({ txns, history, setHistory, onBack, budgets }) => {
 };
 
 // ============================================================
-// STATS
+// INSIGHTS (full analysis)
 // ============================================================
-const Stats = ({ txns, onDelete, onBack, onEdit, budgets }) => {
+const Insights = ({ txns, budgets, onBack }) => {
+  const month = today().slice(0, 7);
+  const { findings } = analyze(txns, month, budgets);
+
+  return (
+    <div style={{ minHeight: '100vh' }}>
+      <div style={{ padding: '20px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <button onClick={onBack} className="btn-press" style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer', padding: '4px' }}>
+          <ArrowLeft size={20} />
+        </button>
+        <div>
+          <div className="display" style={{ fontSize: '18px', color: C.text, fontWeight: 600 }}>All insights</div>
+          <div style={{ fontSize: '11px', color: C.textDim }}>{findings.length} findings this month</div>
+        </div>
+      </div>
+      <div style={{ maxWidth: '560px', margin: '0 auto', padding: '20px' }}>
+        {findings.length === 0 ? (
+          <div style={{ padding: '60px 20px', textAlign: 'center', color: C.textMuted, fontSize: '13px' }}>
+            Log a few more transactions and the CFO will have something to say.
+          </div>
+        ) : findings.map((f, i) => <FindingCard key={i} finding={f} />)}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// STATS / MONTH VIEW
+// ============================================================
+const Stats = ({ txns, onBack, onEdit, budgets, onNav }) => {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
-  const mk = today().slice(0, 7);
-  const monthTxns = txns.filter(t => t.date.startsWith(mk));
+  const month = today().slice(0, 7);
+  const monthTxns = txns.filter(t => t.date.startsWith(month));
 
   const income = monthTxns.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
   const expense = monthTxns.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
   const net = income - expense;
-  const rate = income > 0 ? net / income : 0;
-
-  const businessIn = monthTxns.filter(t => t.type === 'income' && t.scope === 'business').reduce((s, t) => s + t.amount, 0);
-  const businessOut = monthTxns.filter(t => t.type === 'expense' && t.scope === 'business').reduce((s, t) => s + t.amount, 0);
-  const personalIn = monthTxns.filter(t => t.type === 'income' && t.scope === 'personal').reduce((s, t) => s + t.amount, 0);
-  const personalOut = monthTxns.filter(t => t.type === 'expense' && t.scope === 'personal').reduce((s, t) => s + t.amount, 0);
+  const rate = F.savingsRate(income, expense);
 
   const byCat = monthTxns.filter(t => t.type === 'expense').reduce((acc, t) => { acc[t.category] = (acc[t.category] || 0) + t.amount; return acc; }, {});
   const topCats = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 5);
@@ -689,11 +632,7 @@ const Stats = ({ txns, onDelete, onBack, onEdit, budgets }) => {
     let base = search.trim() ? txns : monthTxns;
     if (search.trim()) {
       const q = search.toLowerCase();
-      base = base.filter(t =>
-        (t.description || '').toLowerCase().includes(q) ||
-        t.category.toLowerCase().includes(q) ||
-        t.scope.toLowerCase().includes(q)
-      );
+      base = base.filter(t => (t.description || '').toLowerCase().includes(q) || t.category.toLowerCase().includes(q) || t.scope.toLowerCase().includes(q));
     }
     if (filter === 'income') base = base.filter(t => t.type === 'income');
     else if (filter === 'expense') base = base.filter(t => t.type === 'expense');
@@ -708,7 +647,7 @@ const Stats = ({ txns, onDelete, onBack, onEdit, budgets }) => {
         </button>
         <div style={{ flex: 1 }}>
           <div className="display" style={{ fontSize: '18px', color: C.text, fontWeight: 600 }}>{new Date().toLocaleDateString('en', { month: 'long', year: 'numeric' })}</div>
-          <div style={{ fontSize: '11px', color: C.textDim }}>{monthTxns.length} this month · {txns.length} all-time</div>
+          <div style={{ fontSize: '11px', color: C.textDim }}>{monthTxns.length} this month · {txns.length} total</div>
         </div>
         <button onClick={() => exportCSV(txns)} className="btn-press" style={{
           padding: '8px 12px', background: C.panel, border: `1px solid ${C.border}`,
@@ -721,56 +660,28 @@ const Stats = ({ txns, onDelete, onBack, onEdit, budgets }) => {
 
       <div style={{ maxWidth: '560px', margin: '0 auto', padding: '20px' }}>
         <div className="fade-up" style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '14px', padding: '20px', marginBottom: '14px', textAlign: 'center' }}>
-          <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '10px', fontWeight: 600 }}>Savings rate this month</div>
+          <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '10px', fontWeight: 600 }}>Savings rate</div>
           <div className="num display" style={{ fontSize: '56px', color: rate >= 0.2 ? C.positive : rate >= 0.1 ? C.warm : C.negative, fontWeight: 600, lineHeight: 1 }}>
             {(rate * 100).toFixed(0)}%
-          </div>
-          <div style={{ fontSize: '12px', color: C.textDim, marginTop: '10px' }}>
-            {rate >= 0.3 ? 'Excellent. Now invest it.' :
-             rate >= 0.2 ? 'Solid. Push for 30%.' :
-             rate >= 0.1 ? 'Fragile. Tighten this week.' :
-             rate > 0 ? 'Weak. Find one leak today.' :
-             income === 0 ? 'No income logged yet.' :
-             'Danger. Spending beats earning.'}
           </div>
         </div>
 
         <div className="fade-up" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '20px' }}>
-          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', padding: '14px', textAlign: 'center' }}>
-            <div style={{ fontSize: '10px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px' }}>In</div>
-            <div className="num" style={{ fontSize: '17px', color: C.positive, fontWeight: 500 }}>{fmt(income)}</div>
-          </div>
-          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', padding: '14px', textAlign: 'center' }}>
-            <div style={{ fontSize: '10px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px' }}>Out</div>
-            <div className="num" style={{ fontSize: '17px', color: C.text, fontWeight: 500 }}>{fmt(expense)}</div>
-          </div>
-          <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', padding: '14px', textAlign: 'center' }}>
-            <div style={{ fontSize: '10px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px' }}>Net</div>
-            <div className="num" style={{ fontSize: '17px', color: net >= 0 ? C.positive : C.negative, fontWeight: 500 }}>{fmt(net)}</div>
-          </div>
-        </div>
-
-        {(businessIn + businessOut > 0) && (
-          <div className="fade-up" style={{ marginBottom: '20px' }}>
-            <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '10px', fontWeight: 600 }}>Split</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', padding: '14px' }}>
-                <div style={{ fontSize: '11px', color: C.textDim, marginBottom: '8px' }}>Business</div>
-                <div className="num" style={{ fontSize: '19px', color: businessIn - businessOut >= 0 ? C.positive : C.negative, fontWeight: 500 }}>{fmt(businessIn - businessOut)}</div>
-                <div className="num" style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>{fmt(businessIn)} in · {fmt(businessOut)} out</div>
-              </div>
-              <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', padding: '14px' }}>
-                <div style={{ fontSize: '11px', color: C.textDim, marginBottom: '8px' }}>Personal</div>
-                <div className="num" style={{ fontSize: '19px', color: personalIn - personalOut >= 0 ? C.positive : C.negative, fontWeight: 500 }}>{fmt(personalIn - personalOut)}</div>
-                <div className="num" style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>{fmt(personalIn)} in · {fmt(personalOut)} out</div>
-              </div>
+          {[
+            { label: 'In', value: income, color: C.positive },
+            { label: 'Out', value: expense, color: C.text },
+            { label: 'Net', value: net, color: net >= 0 ? C.positive : C.negative }
+          ].map(({ label, value, color }) => (
+            <div key={label} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', padding: '14px', textAlign: 'center' }}>
+              <div style={{ fontSize: '10px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px' }}>{label}</div>
+              <div className="num" style={{ fontSize: '17px', color, fontWeight: 500 }}>{fmt(value)}</div>
             </div>
-          </div>
-        )}
+          ))}
+        </div>
 
         {topCats.length > 0 && (
           <div className="fade-up" style={{ marginBottom: '20px' }}>
-            <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '10px', fontWeight: 600 }}>Where your money went</div>
+            <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '10px', fontWeight: 600 }}>Top spend</div>
             <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '14px', padding: '16px' }}>
               {topCats.map(([cat, amt], i) => {
                 const pct = (amt / expense) * 100;
@@ -785,7 +696,7 @@ const Stats = ({ txns, onDelete, onBack, onEdit, budgets }) => {
                       </span>
                     </div>
                     <div style={{ height: '4px', background: C.panelHi, borderRadius: '2px', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${Math.min(100, pct)}%`, background: budgetPct >= 100 ? C.negative : budgetPct >= 80 ? C.warm : C.accent, transition: 'width 0.6s' }} />
+                      <div style={{ height: '100%', width: `${Math.min(100, pct)}%`, background: budgetPct >= 100 ? C.negative : budgetPct >= 80 ? C.warm : C.accent }} />
                     </div>
                   </div>
                 );
@@ -793,6 +704,14 @@ const Stats = ({ txns, onDelete, onBack, onEdit, budgets }) => {
             </div>
           </div>
         )}
+
+        <button onClick={() => onNav('insights')} className="btn-press" style={{
+          width: '100%', marginBottom: '20px', padding: '14px', background: C.panel,
+          border: `1px solid ${C.border}`, borderRadius: '10px', color: C.text, fontSize: '13px',
+          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
+        }}>
+          <TrendingUp size={14} /> See all insights
+        </button>
 
         <div className="fade-up">
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '12px' }}>
@@ -832,34 +751,27 @@ const Stats = ({ txns, onDelete, onBack, onEdit, budgets }) => {
               <div style={{ padding: '40px', textAlign: 'center', color: C.textMuted, fontSize: '13px', background: C.panel, borderRadius: '12px' }}>
                 {search ? `Nothing matches "${search}"` : 'Nothing here'}
               </div>
-            ) : (
-              filtered.slice(0, 200).map(t => (
-                <div key={t.id} onClick={() => onEdit(t)} className="btn-press" style={{
-                  display: 'flex', alignItems: 'center', padding: '12px 14px',
-                  background: C.panel, borderRadius: '8px', gap: '10px', cursor: 'pointer'
-                }}>
-                  <div className="num" style={{ fontSize: '10px', color: C.textMuted, minWidth: '50px' }}>
-                    {t.date.slice(5).replace('-', '/')}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '14px', color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {t.description || t.category}
-                      {t.recurringId && <Repeat size={10} style={{ marginLeft: '6px', color: C.textMuted, display: 'inline' }} />}
-                    </div>
-                    <div style={{ fontSize: '11px', color: C.textMuted }}>{t.category} · {t.scope}</div>
-                  </div>
-                  <div className="num" style={{ fontSize: '14px', color: t.type === 'income' ? C.positive : C.text, fontWeight: 500 }}>
-                    {t.type === 'income' ? '+' : '−'}{fmt(t.amount)}
-                  </div>
+            ) : filtered.slice(0, 200).map(t => (
+              <div key={t.id} onClick={() => onEdit(t)} className="btn-press" style={{
+                display: 'flex', alignItems: 'center', padding: '12px 14px',
+                background: C.panel, borderRadius: '8px', gap: '10px', cursor: 'pointer'
+              }}>
+                <div className="num" style={{ fontSize: '10px', color: C.textMuted, minWidth: '50px' }}>
+                  {t.date.slice(5).replace('-', '/')}
                 </div>
-              ))
-            )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '14px', color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {t.description || t.category}
+                    {t.recurringId && <Repeat size={10} style={{ marginLeft: '6px', color: C.textMuted, display: 'inline' }} />}
+                  </div>
+                  <div style={{ fontSize: '11px', color: C.textMuted }}>{t.category} · {t.scope}</div>
+                </div>
+                <div className="num" style={{ fontSize: '14px', color: t.type === 'income' ? C.positive : C.text, fontWeight: 500 }}>
+                  {t.type === 'income' ? '+' : '−'}{fmt(t.amount)}
+                </div>
+              </div>
+            ))}
           </div>
-          {filtered.length > 200 && (
-            <div style={{ textAlign: 'center', padding: '12px', fontSize: '11px', color: C.textMuted }}>
-              Showing first 200 of {filtered.length}
-            </div>
-          )}
         </div>
       </div>
     </div>
@@ -867,13 +779,256 @@ const Stats = ({ txns, onDelete, onBack, onEdit, budgets }) => {
 };
 
 // ============================================================
-// SETTINGS
+// TOOLS / CALCULATORS
+// ============================================================
+const Tools = ({ onBack }) => {
+  const [tool, setTool] = useState('sip');
+  // SIP calculator state
+  const [sipMonthly, setSipMonthly] = useState(10000);
+  const [sipYears, setSipYears] = useState(10);
+  const [sipRate, setSipRate] = useState(12);
+  // EMI calculator
+  const [emiPrincipal, setEmiPrincipal] = useState(1000000);
+  const [emiRate, setEmiRate] = useState(9);
+  const [emiYears, setEmiYears] = useState(10);
+  // Retirement
+  const [retAge, setRetAge] = useState(30);
+  const [retTargetAge, setRetTargetAge] = useState(60);
+  const [retMonthlyExp, setRetMonthlyExp] = useState(50000);
+  // Tax
+  const [taxIncome, setTaxIncome] = useState(1500000);
+
+  const tools = [
+    { id: 'sip', label: 'SIP', icon: TrendingUp },
+    { id: 'emi', label: 'EMI', icon: Calculator },
+    { id: 'retire', label: 'Retire', icon: Flame },
+    { id: 'tax', label: 'Tax', icon: Calculator }
+  ];
+
+  const inputStyle = {
+    width: '100%', background: C.panelHi, border: `1px solid ${C.border}`,
+    borderRadius: '8px', padding: '12px 14px', color: C.text, fontSize: '14px'
+  };
+
+  return (
+    <div style={{ minHeight: '100vh' }}>
+      <div style={{ padding: '20px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <button onClick={onBack} className="btn-press" style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer', padding: '4px' }}>
+          <ArrowLeft size={20} />
+        </button>
+        <div>
+          <div className="display" style={{ fontSize: '18px', color: C.text, fontWeight: 600 }}>Financial calculators</div>
+          <div style={{ fontSize: '11px', color: C.textDim }}>Run the numbers before you commit.</div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: '560px', margin: '0 auto', padding: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '24px' }}>
+          {tools.map(({ id, label, icon: Icon }) => (
+            <button key={id} onClick={() => setTool(id)} className="btn-press" style={{
+              padding: '12px 8px', background: tool === id ? C.accent : C.panel,
+              color: tool === id ? C.bg : C.text,
+              border: `1px solid ${tool === id ? C.accent : C.border}`,
+              borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600,
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px'
+            }}>
+              <Icon size={14} /> {label}
+            </button>
+          ))}
+        </div>
+
+        {tool === 'sip' && (
+          <div className="fade-up">
+            <div className="display" style={{ fontSize: '20px', color: C.text, fontWeight: 600, marginBottom: '4px' }}>SIP Calculator</div>
+            <div style={{ fontSize: '13px', color: C.textDim, marginBottom: '20px' }}>How big will your monthly SIP grow over time?</div>
+
+            {[
+              { label: 'Monthly investment (₹)', value: sipMonthly, set: setSipMonthly },
+              { label: 'Number of years', value: sipYears, set: setSipYears },
+              { label: 'Expected annual return (%)', value: sipRate, set: setSipRate, step: 0.5 }
+            ].map(({ label, value, set, step }) => (
+              <div key={label} style={{ marginBottom: '12px' }}>
+                <label style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px', display: 'block', fontWeight: 600 }}>{label}</label>
+                <input type="number" value={value} step={step || 1} onChange={(e) => set(parseFloat(e.target.value) || 0)} className="num" style={inputStyle} />
+              </div>
+            ))}
+
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', padding: '20px', marginTop: '20px', textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '8px', fontWeight: 600 }}>Future value</div>
+              <div className="num display" style={{ fontSize: '36px', color: C.accent, fontWeight: 600 }}>
+                {fmt(F.sipFV(sipMonthly, sipRate / 100, sipYears))}
+              </div>
+              <div className="num" style={{ fontSize: '12px', color: C.textDim, marginTop: '8px' }}>
+                Invested: {fmt(sipMonthly * sipYears * 12)} · Gain: {fmt(F.sipFV(sipMonthly, sipRate / 100, sipYears) - sipMonthly * sipYears * 12)}
+              </div>
+              <div className="num" style={{ fontSize: '11px', color: C.textMuted, marginTop: '12px' }}>
+                Real return (after 6% inflation): {fmt(F.sipFV(sipMonthly, F.realReturn(sipRate / 100, 0.06), sipYears))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tool === 'emi' && (
+          <div className="fade-up">
+            <div className="display" style={{ fontSize: '20px', color: C.text, fontWeight: 600, marginBottom: '4px' }}>EMI Calculator</div>
+            <div style={{ fontSize: '13px', color: C.textDim, marginBottom: '20px' }}>Before you sign a loan, know the real cost.</div>
+
+            {[
+              { label: 'Loan amount (₹)', value: emiPrincipal, set: setEmiPrincipal },
+              { label: 'Annual interest rate (%)', value: emiRate, set: setEmiRate, step: 0.1 },
+              { label: 'Tenure (years)', value: emiYears, set: setEmiYears }
+            ].map(({ label, value, set, step }) => (
+              <div key={label} style={{ marginBottom: '12px' }}>
+                <label style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px', display: 'block', fontWeight: 600 }}>{label}</label>
+                <input type="number" value={value} step={step || 1} onChange={(e) => set(parseFloat(e.target.value) || 0)} className="num" style={inputStyle} />
+              </div>
+            ))}
+
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', padding: '20px', marginTop: '20px', textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '8px', fontWeight: 600 }}>Monthly EMI</div>
+              <div className="num display" style={{ fontSize: '36px', color: C.accent, fontWeight: 600 }}>
+                {fmt(F.calculateEMI(emiPrincipal, emiRate / 100, emiYears))}
+              </div>
+              <div className="num" style={{ fontSize: '12px', color: C.textDim, marginTop: '8px' }}>
+                Total interest: {fmt(F.totalInterestPaid(emiPrincipal, emiRate / 100, emiYears))}
+              </div>
+              <div className="num" style={{ fontSize: '11px', color: C.textMuted, marginTop: '4px' }}>
+                Total repayment: {fmt(emiPrincipal + F.totalInterestPaid(emiPrincipal, emiRate / 100, emiYears))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tool === 'retire' && (
+          <div className="fade-up">
+            <div className="display" style={{ fontSize: '20px', color: C.text, fontWeight: 600, marginBottom: '4px' }}>Retirement Calculator</div>
+            <div style={{ fontSize: '13px', color: C.textDim, marginBottom: '20px' }}>How much do you need, and what SIP gets you there?</div>
+
+            {[
+              { label: 'Your age now', value: retAge, set: setRetAge },
+              { label: 'Target retirement age', value: retTargetAge, set: setRetTargetAge },
+              { label: 'Current monthly expense (₹)', value: retMonthlyExp, set: setRetMonthlyExp }
+            ].map(({ label, value, set }) => (
+              <div key={label} style={{ marginBottom: '12px' }}>
+                <label style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px', display: 'block', fontWeight: 600 }}>{label}</label>
+                <input type="number" value={value} onChange={(e) => set(parseFloat(e.target.value) || 0)} className="num" style={inputStyle} />
+              </div>
+            ))}
+
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', padding: '20px', marginTop: '20px', textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '8px', fontWeight: 600 }}>Corpus needed at {retTargetAge}</div>
+              <div className="num display" style={{ fontSize: '32px', color: C.accent, fontWeight: 600 }}>
+                {fmt(F.retirementCorpus(retMonthlyExp, retTargetAge - retAge))}
+              </div>
+              <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: '8px', fontWeight: 600 }}>Required monthly SIP</div>
+                <div className="num" style={{ fontSize: '24px', color: C.text, fontWeight: 600 }}>
+                  {fmt(F.retirementSipRequired(retMonthlyExp, retAge, retTargetAge) || 0)}
+                </div>
+                <div className="num" style={{ fontSize: '11px', color: C.textMuted, marginTop: '6px' }}>
+                  Assumes 12% return, 6% inflation, 25x rule
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tool === 'tax' && (
+          <div className="fade-up">
+            <div className="display" style={{ fontSize: '20px', color: C.text, fontWeight: 600, marginBottom: '4px' }}>Tax Calculator</div>
+            <div style={{ fontSize: '13px', color: C.textDim, marginBottom: '20px' }}>India FY 2024-25 new regime (indicative).</div>
+
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '6px', display: 'block', fontWeight: 600 }}>Annual income (₹)</label>
+              <input type="number" value={taxIncome} onChange={(e) => setTaxIncome(parseFloat(e.target.value) || 0)} className="num" style={inputStyle} />
+            </div>
+
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', padding: '20px', marginTop: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <span style={{ fontSize: '13px', color: C.textDim }}>Gross income</span>
+                <span className="num" style={{ fontSize: '14px', color: C.text }}>{fmt(taxIncome)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <span style={{ fontSize: '13px', color: C.textDim }}>Standard deduction</span>
+                <span className="num" style={{ fontSize: '14px', color: C.text }}>−₹75,000</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '10px', borderTop: `1px solid ${C.border}`, marginBottom: '10px' }}>
+                <span style={{ fontSize: '13px', color: C.textDim }}>Tax payable (with cess)</span>
+                <span className="num" style={{ fontSize: '18px', color: C.negative, fontWeight: 600 }}>{fmt(F.calculateTaxNewRegime(taxIncome))}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <span style={{ fontSize: '13px', color: C.textDim }}>Effective tax rate</span>
+                <span className="num" style={{ fontSize: '14px', color: C.text }}>
+                  {taxIncome > 0 ? ((F.calculateTaxNewRegime(taxIncome) / taxIncome) * 100).toFixed(1) : 0}%
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '10px', borderTop: `1px solid ${C.border}` }}>
+                <span style={{ fontSize: '13px', color: C.textDim }}>Take-home (post tax)</span>
+                <span className="num" style={{ fontSize: '16px', color: C.positive, fontWeight: 600 }}>
+                  {fmt(taxIncome - F.calculateTaxNewRegime(taxIncome))}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// LEARN (knowledge base)
+// ============================================================
+const Learn = ({ onBack }) => {
+  const [open, setOpen] = useState(null);
+  return (
+    <div style={{ minHeight: '100vh' }}>
+      <div style={{ padding: '20px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <button onClick={onBack} className="btn-press" style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer', padding: '4px' }}>
+          <ArrowLeft size={20} />
+        </button>
+        <div>
+          <div className="display" style={{ fontSize: '18px', color: C.text, fontWeight: 600 }}>Money principles</div>
+          <div style={{ fontSize: '11px', color: C.textDim }}>The foundations the CFO uses.</div>
+        </div>
+      </div>
+      <div style={{ maxWidth: '560px', margin: '0 auto', padding: '20px' }}>
+        {KNOWLEDGE.map(k => (
+          <div key={k.id} style={{ marginBottom: '8px' }}>
+            <button onClick={() => setOpen(open === k.id ? null : k.id)} className="btn-press" style={{
+              width: '100%', padding: '16px 18px', background: C.panel, border: `1px solid ${C.border}`,
+              borderRadius: '10px', color: C.text, fontSize: '14px', textAlign: 'left', cursor: 'pointer',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+            }}>
+              <div>
+                <div className="display" style={{ fontSize: '16px', fontWeight: 600, marginBottom: '2px' }}>{k.topic}</div>
+                <div style={{ fontSize: '12px', color: C.textDim }}>{k.short}</div>
+              </div>
+              <ChevronRight size={16} style={{ color: C.textMuted, transform: open === k.id ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} />
+            </button>
+            {open === k.id && (
+              <div className="fade-up" style={{
+                padding: '18px 20px', background: C.panelHi, border: `1px solid ${C.border}`, borderTop: 'none',
+                borderRadius: '0 0 10px 10px', marginTop: '-1px',
+                fontSize: '14px', color: C.text, lineHeight: 1.6, whiteSpace: 'pre-wrap'
+              }}>
+                {k.body}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// SETTINGS (budgets + recurring)
 // ============================================================
 const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, onBack }) => {
   const [tab, setTab] = useState('budgets');
   const [showAddRec, setShowAddRec] = useState(false);
   const [newRec, setNewRec] = useState({ type: 'expense', scope: 'personal', amount: '', category: '', description: '', frequency: 'monthly', startDate: today() });
-
   const allCats = [...PERSONAL_EXPENSE_CATS, ...BUSINESS_EXPENSE_CATS];
 
   const updateBudget = (cat, value) => {
@@ -887,19 +1042,14 @@ const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, on
       ? (newRec.scope === 'business' ? BUSINESS_INCOME_CATS : PERSONAL_INCOME_CATS)
       : (newRec.scope === 'business' ? BUSINESS_EXPENSE_CATS : PERSONAL_EXPENSE_CATS);
     setRecurring([...recurring, {
-      id: Date.now().toString(),
-      type: newRec.type, scope: newRec.scope,
-      amount: parseFloat(newRec.amount),
-      category: newRec.category || cats[0],
-      description: newRec.description,
-      frequency: newRec.frequency, startDate: newRec.startDate,
+      id: Date.now().toString(), type: newRec.type, scope: newRec.scope,
+      amount: parseFloat(newRec.amount), category: newRec.category || cats[0],
+      description: newRec.description, frequency: newRec.frequency, startDate: newRec.startDate,
       lastApplied: null, createdAt: Date.now()
     }]);
     setNewRec({ type: 'expense', scope: 'personal', amount: '', category: '', description: '', frequency: 'monthly', startDate: today() });
     setShowAddRec(false);
   };
-
-  const deleteRecurring = (id) => setRecurring(recurring.filter(r => r.id !== id));
 
   const newRecCats = newRec.type === 'income'
     ? (newRec.scope === 'business' ? BUSINESS_INCOME_CATS : PERSONAL_INCOME_CATS)
@@ -916,22 +1066,20 @@ const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, on
 
       <div style={{ maxWidth: '560px', margin: '0 auto', padding: '20px' }}>
         <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
-          <button onClick={() => setTab('budgets')} className="btn-press" style={{
-            flex: 1, padding: '12px', background: tab === 'budgets' ? C.accent : C.panel,
-            color: tab === 'budgets' ? C.bg : C.text, border: `1px solid ${tab === 'budgets' ? C.accent : C.border}`,
-            borderRadius: '10px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em'
-          }}>Budgets</button>
-          <button onClick={() => setTab('recurring')} className="btn-press" style={{
-            flex: 1, padding: '12px', background: tab === 'recurring' ? C.accent : C.panel,
-            color: tab === 'recurring' ? C.bg : C.text, border: `1px solid ${tab === 'recurring' ? C.accent : C.border}`,
-            borderRadius: '10px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em'
-          }}>Recurring</button>
+          {['budgets', 'recurring'].map(t => (
+            <button key={t} onClick={() => setTab(t)} className="btn-press" style={{
+              flex: 1, padding: '12px', background: tab === t ? C.accent : C.panel,
+              color: tab === t ? C.bg : C.text, border: `1px solid ${tab === t ? C.accent : C.border}`,
+              borderRadius: '10px', cursor: 'pointer', fontSize: '13px', fontWeight: 600,
+              textTransform: 'uppercase', letterSpacing: '0.1em'
+            }}>{t}</button>
+          ))}
         </div>
 
         {tab === 'budgets' && (
           <div className="fade-up">
             <div style={{ fontSize: '13px', color: C.textDim, marginBottom: '16px', lineHeight: 1.5 }}>
-              Set a monthly cap per category. Warning at 80%, alert at 100%. Leave blank to skip.
+              Set a monthly cap per category. Warning at 80%, alert at 100%.
             </div>
             <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '12px', overflow: 'hidden' }}>
               {allCats.map((cat, i) => (
@@ -958,9 +1106,8 @@ const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, on
         {tab === 'recurring' && (
           <div className="fade-up">
             <div style={{ fontSize: '13px', color: C.textDim, marginBottom: '16px', lineHeight: 1.5 }}>
-              Rent, EMIs, salary, subscriptions. These log automatically when you open the app.
+              Rent, EMIs, salary, subscriptions. Auto-logs when you open the app.
             </div>
-
             {recurring.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
                 {recurring.map(r => (
@@ -976,7 +1123,8 @@ const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, on
                     <div className="num" style={{ fontSize: '14px', color: r.type === 'income' ? C.positive : C.text, fontWeight: 500 }}>
                       {r.type === 'income' ? '+' : '−'}{fmt(r.amount)}
                     </div>
-                    <button onClick={() => deleteRecurring(r.id)} style={{ background: 'transparent', border: 'none', color: C.textMuted, cursor: 'pointer', padding: '4px' }}>
+                    <button onClick={() => setRecurring(recurring.filter(x => x.id !== r.id))}
+                      style={{ background: 'transparent', border: 'none', color: C.textMuted, cursor: 'pointer', padding: '4px' }}>
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -990,31 +1138,24 @@ const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, on
                 border: `1px dashed ${C.border}`, borderRadius: '10px', color: C.textDim,
                 fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
               }}>
-                <Plus size={14} /> Add recurring transaction
+                <Plus size={14} /> Add recurring
               </button>
             ) : (
               <div className="pop" style={{ background: C.panel, border: `1px solid ${C.borderHi}`, borderRadius: '12px', padding: '20px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-                  <button onClick={() => setNewRec({...newRec, type: 'expense'})} style={{
-                    padding: '8px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em',
-                    background: newRec.type === 'expense' ? C.negative : 'transparent',
-                    color: newRec.type === 'expense' ? C.bg : C.textDim,
-                    border: `1px solid ${newRec.type === 'expense' ? C.negative : C.border}`,
-                    borderRadius: '6px', cursor: 'pointer'
-                  }}>Expense</button>
-                  <button onClick={() => setNewRec({...newRec, type: 'income'})} style={{
-                    padding: '8px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em',
-                    background: newRec.type === 'income' ? C.positive : 'transparent',
-                    color: newRec.type === 'income' ? C.bg : C.textDim,
-                    border: `1px solid ${newRec.type === 'income' ? C.positive : C.border}`,
-                    borderRadius: '6px', cursor: 'pointer'
-                  }}>Income</button>
+                  {['expense', 'income'].map(tp => (
+                    <button key={tp} onClick={() => setNewRec({...newRec, type: tp})} style={{
+                      padding: '8px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em',
+                      background: newRec.type === tp ? (tp === 'income' ? C.positive : C.negative) : 'transparent',
+                      color: newRec.type === tp ? C.bg : C.textDim,
+                      border: `1px solid ${newRec.type === tp ? (tp === 'income' ? C.positive : C.negative) : C.border}`,
+                      borderRadius: '6px', cursor: 'pointer'
+                    }}>{tp}</button>
+                  ))}
                 </div>
-
                 <input type="text" placeholder="Description (e.g., House rent)" value={newRec.description}
                   onChange={(e) => setNewRec({...newRec, description: e.target.value})}
                   style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '10px 12px', color: C.text, fontSize: '14px', marginBottom: '8px' }} />
-
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
                   <input type="number" placeholder="Amount" value={newRec.amount}
                     onChange={(e) => setNewRec({...newRec, amount: e.target.value})} className="num"
@@ -1025,7 +1166,6 @@ const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, on
                     <option value="business">Business</option>
                   </select>
                 </div>
-
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
                   <select value={newRec.category} onChange={(e) => setNewRec({...newRec, category: e.target.value})}
                     style={{ background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '10px 12px', color: C.text, fontSize: '14px' }}>
@@ -1039,13 +1179,8 @@ const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, on
                     <option value="monthly">Monthly</option>
                   </select>
                 </div>
-
-                <div style={{ marginBottom: '14px' }}>
-                  <label style={{ fontSize: '11px', color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '4px', display: 'block', fontWeight: 600 }}>Start date</label>
-                  <input type="date" value={newRec.startDate} onChange={(e) => setNewRec({...newRec, startDate: e.target.value})}
-                    style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '10px 12px', color: C.text, fontSize: '14px' }} />
-                </div>
-
+                <input type="date" value={newRec.startDate} onChange={(e) => setNewRec({...newRec, startDate: e.target.value})}
+                  style={{ width: '100%', background: C.panelHi, border: `1px solid ${C.border}`, borderRadius: '8px', padding: '10px 12px', color: C.text, fontSize: '14px', marginBottom: '14px' }} />
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button onClick={() => setShowAddRec(false)} style={{
                     padding: '10px 16px', background: 'transparent', color: C.textDim,
@@ -1068,10 +1203,10 @@ const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, on
             border: `1px solid ${C.border}`, borderRadius: '8px', color: C.text,
             fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
           }}>
-            <Download size={14} /> Export all transactions to CSV
+            <Download size={14} /> Export to CSV
           </button>
           <div style={{ fontSize: '11px', color: C.textMuted, marginTop: '10px', textAlign: 'center' }}>
-            {txns.length} transactions in total
+            {txns.length} transactions stored locally
           </div>
         </div>
       </div>
@@ -1080,12 +1215,11 @@ const SettingsScreen = ({ budgets, setBudgets, recurring, setRecurring, txns, on
 };
 
 // ============================================================
-// MAIN
+// MAIN APP
 // ============================================================
 export default function App() {
   const [screen, setScreen] = useState('today');
   const [txns, setTxns] = useState([]);
-  const [history, setHistory] = useState([]);
   const [budgets, setBudgets] = useState({});
   const [recurring, setRecurring] = useState([]);
   const [lastDeleted, setLastDeleted] = useState(null);
@@ -1096,31 +1230,26 @@ export default function App() {
     const style = document.createElement('style');
     style.textContent = FONTS_CSS;
     document.head.appendChild(style);
-
     (async () => {
-      const [t, h, b, r] = await Promise.all([
-        S.get('cfo:transactions', []),
-        S.get('cfo:chat', []),
-        S.get('cfo:budgets', {}),
-        S.get('cfo:recurring', [])
+      const [t, b, r] = await Promise.all([
+        S.get('transactions', []),
+        S.get('budgets', {}),
+        S.get('recurring', [])
       ]);
       const { newTxns, updatedRecurring } = processRecurring(r, t);
-      const allTxns = [...newTxns, ...t];
-      setTxns(allTxns);
-      setHistory(h);
+      setTxns([...newTxns, ...t]);
       setBudgets(b);
       setRecurring(updatedRecurring);
       setLoaded(true);
     })();
   }, []);
 
-  useEffect(() => { if (loaded) S.set('cfo:transactions', txns); }, [txns, loaded]);
-  useEffect(() => { if (loaded) S.set('cfo:chat', history); }, [history, loaded]);
-  useEffect(() => { if (loaded) S.set('cfo:budgets', budgets); }, [budgets, loaded]);
-  useEffect(() => { if (loaded) S.set('cfo:recurring', recurring); }, [recurring, loaded]);
+  useEffect(() => { if (loaded) S.set('transactions', txns); }, [txns, loaded]);
+  useEffect(() => { if (loaded) S.set('budgets', budgets); }, [budgets, loaded]);
+  useEffect(() => { if (loaded) S.set('recurring', recurring); }, [recurring, loaded]);
 
   const addTxn = (t) => setTxns([t, ...txns]);
-  const updateTxn = (updated) => { setTxns(txns.map(t => t.id === updated.id ? updated : t)); setEditingTxn(null); };
+  const updateTxn = (u) => { setTxns(txns.map(t => t.id === u.id ? u : t)); setEditingTxn(null); };
   const deleteTxn = (id) => {
     const t = txns.find(x => x.id === id);
     if (t) setLastDeleted(t);
@@ -1128,37 +1257,27 @@ export default function App() {
     setEditingTxn(null);
     setTimeout(() => setLastDeleted(null), 8000);
   };
-  const undoDelete = () => {
-    if (lastDeleted) { setTxns([lastDeleted, ...txns]); setLastDeleted(null); }
-  };
+  const undoDelete = () => { if (lastDeleted) { setTxns([lastDeleted, ...txns]); setLastDeleted(null); } };
 
   if (!loaded) {
-    return (
-      <div style={{ minHeight: '100vh', background: C.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Loader2 className="animate-spin" style={{ color: C.textDim }} />
-      </div>
-    );
+    return <div style={{ minHeight: '100vh', background: C.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <Loader2 className="animate-spin" style={{ color: C.textDim }} />
+    </div>;
   }
+
+  const nav = (id) => setScreen(id);
+  const back = () => setScreen('today');
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: "'Instrument Sans', -apple-system, sans-serif", fontSize: '14px' }}>
-      {screen === 'today' && (
-        <Today txns={txns} onAdd={addTxn} onUndo={undoDelete} lastDeleted={lastDeleted}
-          onOpenCFO={() => setScreen('cfo')} onOpenStats={() => setScreen('stats')}
-          onOpenSettings={() => setScreen('settings')} budgets={budgets} onEdit={setEditingTxn} />
-      )}
-      {screen === 'cfo' && (
-        <CFOChat txns={txns} history={history} setHistory={setHistory} onBack={() => setScreen('today')} budgets={budgets} />
-      )}
-      {screen === 'stats' && (
-        <Stats txns={txns} onDelete={deleteTxn} onBack={() => setScreen('today')} onEdit={setEditingTxn} budgets={budgets} />
-      )}
-      {screen === 'settings' && (
-        <SettingsScreen budgets={budgets} setBudgets={setBudgets} recurring={recurring} setRecurring={setRecurring} txns={txns} onBack={() => setScreen('today')} />
-      )}
-      {editingTxn && (
-        <EditModal txn={editingTxn} onSave={updateTxn} onClose={() => setEditingTxn(null)} onDelete={deleteTxn} />
-      )}
+      {screen === 'today' && <Today txns={txns} onAdd={addTxn} onUndo={undoDelete} lastDeleted={lastDeleted} onNav={nav} budgets={budgets} onEdit={setEditingTxn} />}
+      {screen === 'cfo' && <CFOAsk txns={txns} budgets={budgets} onBack={back} />}
+      {screen === 'stats' && <Stats txns={txns} onBack={back} onEdit={setEditingTxn} budgets={budgets} onNav={nav} />}
+      {screen === 'insights' && <Insights txns={txns} budgets={budgets} onBack={() => setScreen('stats')} />}
+      {screen === 'tools' && <Tools onBack={back} />}
+      {screen === 'learn' && <Learn onBack={back} />}
+      {screen === 'settings' && <SettingsScreen budgets={budgets} setBudgets={setBudgets} recurring={recurring} setRecurring={setRecurring} txns={txns} onBack={back} />}
+      {editingTxn && <EditModal txn={editingTxn} onSave={updateTxn} onClose={() => setEditingTxn(null)} onDelete={deleteTxn} />}
     </div>
   );
 }
