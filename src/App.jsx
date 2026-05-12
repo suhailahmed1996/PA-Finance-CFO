@@ -167,7 +167,9 @@ const EditModal = ({ txn, onSave, onClose, onDelete }) => {
         padding: '24px', maxWidth: '440px', width: '100%', maxHeight: '90vh', overflowY: 'auto'
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <div className="display" style={{ fontSize: '20px', color: C.text, fontWeight: 600 }}>Edit transaction</div>
+          <div className="display" style={{ fontSize: '20px', color: C.text, fontWeight: 600 }}>
+            {txn.id === '__NEW__' ? 'Add transaction' : 'Edit transaction'}
+          </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: C.textMuted, cursor: 'pointer', padding: '4px' }}>
             <X size={18} />
           </button>
@@ -210,17 +212,23 @@ const EditModal = ({ txn, onSave, onClose, onDelete }) => {
           </div>
         ))}
         <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-          <button onClick={() => onDelete(t.id)} className="btn-press" style={{
-            padding: '14px', background: 'transparent', color: C.negative,
-            border: `1px solid ${C.negative}`, borderRadius: '10px', cursor: 'pointer', fontSize: '13px', fontWeight: 600,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
-          }}>
-            <Trash2 size={14} /> Delete
-          </button>
-          <button onClick={() => onSave(t)} className="btn-press" style={{
-            flex: 1, padding: '14px', background: C.accent, color: C.bg, border: 'none', borderRadius: '10px',
-            cursor: 'pointer', fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em'
-          }}>Save changes</button>
+          {txn.id !== '__NEW__' && (
+            <button onClick={() => onDelete(t.id)} className="btn-press" style={{
+              padding: '14px', background: 'transparent', color: C.negative,
+              border: `1px solid ${C.negative}`, borderRadius: '10px', cursor: 'pointer', fontSize: '13px', fontWeight: 600,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
+            }}>
+              <Trash2 size={14} /> Delete
+            </button>
+          )}
+          <button onClick={() => onSave(t)} disabled={!t.amount || t.amount <= 0 || !t.category} className="btn-press" style={{
+            flex: 1, padding: '14px',
+            background: (!t.amount || t.amount <= 0 || !t.category) ? C.border : C.accent,
+            color: (!t.amount || t.amount <= 0 || !t.category) ? C.textMuted : C.bg,
+            border: 'none', borderRadius: '10px',
+            cursor: (!t.amount || t.amount <= 0 || !t.category) ? 'not-allowed' : 'pointer',
+            fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em'
+          }}>{txn.id === '__NEW__' ? 'Add transaction' : 'Save changes'}</button>
         </div>
       </div>
     </div>
@@ -230,7 +238,7 @@ const EditModal = ({ txn, onSave, onClose, onDelete }) => {
 // ============================================================
 // TODAY SCREEN
 // ============================================================
-const Today = ({ txns, onAdd, onUndo, lastDeleted, onNav, budgets, onEdit }) => {
+const Today = ({ txns, onAdd, onUndo, lastDeleted, onNav, budgets, onEdit, onManualAdd }) => {
   const [input, setInput] = useState('');
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState('');
@@ -353,30 +361,41 @@ const Today = ({ txns, onAdd, onUndo, lastDeleted, onNav, budgets, onEdit }) => 
 
         <div className="fade-up" style={{ marginBottom: '24px' }}>
           {!preview && !justSaved && (
-            <div style={{ position: 'relative' }}>
-              <input ref={inputRef} type="text" value={input}
-                onChange={(e) => { setInput(e.target.value); setError(''); }}
-                onKeyDown={(e) => e.key === 'Enter' && handleParse()}
-                placeholder="spent 500 on lunch · got paid 25000"
-                style={{
-                  width: '100%', background: C.panel,
-                  border: `2px solid ${input ? C.accent : C.border}`,
-                  borderRadius: '14px', color: C.text,
-                  padding: '22px 70px 22px 22px', fontSize: '17px',
-                  transition: 'border-color 0.2s'
-                }} />
-              <button onClick={handleParse} disabled={!input.trim()} className="btn-press" style={{
-                position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
-                width: '46px', height: '46px',
-                background: input.trim() ? C.accent : C.border,
-                color: input.trim() ? C.bg : C.textMuted,
-                border: 'none', borderRadius: '10px',
-                cursor: input.trim() ? 'pointer' : 'not-allowed',
-                display: 'flex', alignItems: 'center', justifyContent: 'center'
+            <>
+              <div style={{ position: 'relative' }}>
+                <input ref={inputRef} type="text" value={input}
+                  onChange={(e) => { setInput(e.target.value); setError(''); }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleParse()}
+                  placeholder="spent 500 on lunch · got paid 25000"
+                  style={{
+                    width: '100%', background: C.panel,
+                    border: `2px solid ${input ? C.accent : C.border}`,
+                    borderRadius: '14px', color: C.text,
+                    padding: '22px 70px 22px 22px', fontSize: '17px',
+                    transition: 'border-color 0.2s'
+                  }} />
+                <button onClick={handleParse} disabled={!input.trim()} className="btn-press" style={{
+                  position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
+                  width: '46px', height: '46px',
+                  background: input.trim() ? C.accent : C.border,
+                  color: input.trim() ? C.bg : C.textMuted,
+                  border: 'none', borderRadius: '10px',
+                  cursor: input.trim() ? 'pointer' : 'not-allowed',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}>
+                  <Send size={18} />
+                </button>
+              </div>
+              <button onClick={onManualAdd} className="btn-press" style={{
+                marginTop: '10px', width: '100%', padding: '12px',
+                background: 'transparent', border: `1px dashed ${C.border}`,
+                borderRadius: '10px', color: C.textDim,
+                fontSize: '13px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
               }}>
-                <Send size={18} />
+                <Plus size={14} /> Add manually (pick from list)
               </button>
-            </div>
+            </>
           )}
 
           {preview && !justSaved && (
@@ -1249,8 +1268,17 @@ export default function App() {
   useEffect(() => { if (loaded) S.set('recurring', recurring); }, [recurring, loaded]);
 
   const addTxn = (t) => setTxns([t, ...txns]);
-  const updateTxn = (u) => { setTxns(txns.map(t => t.id === u.id ? u : t)); setEditingTxn(null); };
+  const updateTxn = (u) => {
+    if (u.id === '__NEW__') {
+      const newTxn = { ...u, id: Date.now().toString() + Math.random().toString(36).substring(2, 6), createdAt: Date.now() };
+      setTxns([newTxn, ...txns]);
+    } else {
+      setTxns(txns.map(t => t.id === u.id ? u : t));
+    }
+    setEditingTxn(null);
+  };
   const deleteTxn = (id) => {
+    if (id === '__NEW__') { setEditingTxn(null); return; }
     const t = txns.find(x => x.id === id);
     if (t) setLastDeleted(t);
     setTxns(txns.filter(x => x.id !== id));
@@ -1258,6 +1286,18 @@ export default function App() {
     setTimeout(() => setLastDeleted(null), 8000);
   };
   const undoDelete = () => { if (lastDeleted) { setTxns([lastDeleted, ...txns]); setLastDeleted(null); } };
+  const startManualAdd = () => {
+    setEditingTxn({
+      id: '__NEW__',
+      type: 'expense',
+      scope: 'personal',
+      amount: 0,
+      category: 'Food',
+      date: new Date().toISOString().split('T')[0],
+      description: '',
+      classification: 'want'
+    });
+  };
 
   if (!loaded) {
     return <div style={{ minHeight: '100vh', background: C.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1270,7 +1310,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: "'Instrument Sans', -apple-system, sans-serif", fontSize: '14px' }}>
-      {screen === 'today' && <Today txns={txns} onAdd={addTxn} onUndo={undoDelete} lastDeleted={lastDeleted} onNav={nav} budgets={budgets} onEdit={setEditingTxn} />}
+      {screen === 'today' && <Today txns={txns} onAdd={addTxn} onUndo={undoDelete} lastDeleted={lastDeleted} onNav={nav} budgets={budgets} onEdit={setEditingTxn} onManualAdd={startManualAdd} />}
       {screen === 'cfo' && <CFOAsk txns={txns} budgets={budgets} onBack={back} />}
       {screen === 'stats' && <Stats txns={txns} onBack={back} onEdit={setEditingTxn} budgets={budgets} onNav={nav} />}
       {screen === 'insights' && <Insights txns={txns} budgets={budgets} onBack={() => setScreen('stats')} />}
